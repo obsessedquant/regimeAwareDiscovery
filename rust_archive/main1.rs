@@ -1,17 +1,39 @@
 // ============================================================
-// Rust Backtest Engine v2
+// Rust Backtest Engine v1
 // Regime-Aware Strategy Discovery Pipeline
 // ============================================================
+//
+// Recommended project location:
+// C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\rust_engine
 //
 // Save this file as:
 // rust_engine\src\main.rs
 //
-// Supports:
+// Cargo.toml dependencies needed:
+//
+// [package]
+// name = "regime_backtest_engine"
+// version = "0.1.0"
+// edition = "2021"
+//
+// [dependencies]
+// anyhow = "1.0"
+// chrono = { version = "0.4", features = ["serde"] }
+// clap = { version = "4.5", features = ["derive"] }
+// polars = { version = "0.43", features = ["lazy", "parquet", "csv", "strings", "dtype-categorical"] }
+// serde = { version = "1.0", features = ["derive"] }
+// serde_json = "1.0"
+//
+// Build:
+//   cargo build --release
+//
+// Run:
+//   cargo run --release -- --batch-json "C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\04_rust_inputs\strategy_batch_20260430_094630.json"
+//
+// v1 supports:
 //   Entry:
 //     - cross_above
 //     - cross_below
-//     - threshold
-//     - cross_above/cross_below with right as either column or number
 //   Filters:
 //     - threshold
 //     - comparison
@@ -20,6 +42,13 @@
 //     - time_stop
 //     - opposite_cross
 //     - fixed_rr_atr_stop
+//
+// Assumptions:
+//   - Entry occurs at next bar open after signal confirmation.
+//   - Regime is stamped from the entry bar only.
+//   - One contract per strategy config initially.
+//   - Long and short supported.
+//   - Trades do not overlap within the same strategy.
 // ============================================================
 
 use anyhow::{anyhow, Context, Result};
@@ -64,27 +93,12 @@ struct StrategyConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[serde(untagged)]
-enum RuleOperand {
-    Column(String),
-    Number(f64),
-}
-
-#[derive(Debug, Deserialize, Clone)]
 struct EntryRule {
     #[serde(rename = "type")]
     rule_type: String,
     side: String,
-
-    // Used by cross rules
-    left: Option<RuleOperand>,
-    right: Option<RuleOperand>,
-
-    // Used by threshold rules
-    column: Option<String>,
-    operator: Option<String>,
-    value: Option<f64>,
-
+    left: String,
+    right: String,
     template: Option<String>,
 }
 
@@ -105,8 +119,8 @@ struct ExitRule {
     #[serde(rename = "type")]
     exit_type: String,
     max_bars_in_trade: Option<usize>,
-    left: Option<RuleOperand>,
-    right: Option<RuleOperand>,
+    left: Option<String>,
+    right: Option<String>,
     atr_column: Option<String>,
     stop_atr_multiple: Option<f64>,
     reward_risk: Option<f64>,
@@ -220,7 +234,6 @@ fn main() -> Result<()> {
     let perf_dir = args.output_root.join("performance");
     let family_dir = args.output_root.join("regime_family");
     let tuple_dir = args.output_root.join("regime_tuple");
-
     fs::create_dir_all(&trades_dir)?;
     fs::create_dir_all(&perf_dir)?;
     fs::create_dir_all(&family_dir)?;
@@ -233,12 +246,7 @@ fn main() -> Result<()> {
 
     for (idx, strategy) in batch.strategies.iter().enumerate() {
         if idx % 10 == 0 {
-            println!(
-                "Evaluating strategy {}/{}: {}",
-                idx + 1,
-                batch.strategies.len(),
-                strategy.strategy_id
-            );
+            println!("Evaluating strategy {}/{}: {}", idx + 1, batch.strategies.len(), strategy.strategy_id);
         }
 
         match evaluate_strategy(&market, strategy) {
@@ -261,18 +269,9 @@ fn main() -> Result<()> {
     let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
 
     write_csv(&trades_dir.join(format!("trades_{}.csv", stamp)), &all_trades)?;
-    write_csv(
-        &perf_dir.join(format!("performance_overall_{}.csv", stamp)),
-        &all_overall_perf,
-    )?;
-    write_csv(
-        &family_dir.join(format!("performance_regime_family_{}.csv", stamp)),
-        &all_family_perf,
-    )?;
-    write_csv(
-        &tuple_dir.join(format!("performance_regime_tuple_{}.csv", stamp)),
-        &all_tuple_perf,
-    )?;
+    write_csv(&perf_dir.join(format!("performance_overall_{}.csv", stamp)), &all_overall_perf)?;
+    write_csv(&family_dir.join(format!("performance_regime_family_{}.csv", stamp)), &all_family_perf)?;
+    write_csv(&tuple_dir.join(format!("performance_regime_tuple_{}.csv", stamp)), &all_tuple_perf)?;
 
     println!("Done.");
     println!("Trades: {}", all_trades.len());
@@ -299,12 +298,7 @@ fn load_market_data(path: &Path) -> Result<MarketData> {
     for name in names.iter() {
         let s = df.column(name)?;
         match s.dtype() {
-            DataType::Float64
-            | DataType::Float32
-            | DataType::Int64
-            | DataType::Int32
-            | DataType::UInt64
-            | DataType::UInt32 => {
+            DataType::Float64 | DataType::Float32 | DataType::Int64 | DataType::Int32 | DataType::UInt64 | DataType::UInt32 => {
                 let casted = s.cast(&DataType::Float64)?;
                 let ca = casted.f64()?;
                 let vals: Vec<f64> = ca.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect();
@@ -319,21 +313,17 @@ fn load_market_data(path: &Path) -> Result<MarketData> {
         }
     }
 
-    let timestamp = get_string_or_numeric_as_string_any(&df, &["timestamp", "time", "datetime"])?;
-    let bar_index = get_i64_col_any(&df, &["bar_index"])
-        .unwrap_or_else(|_| (0..df.height() as i64).collect());
-
+    let timestamp = get_string_or_numeric_as_string(&df, "timestamp")?;
+    let bar_index = get_i64_col(&df, "bar_index").unwrap_or_else(|_| (0..df.height() as i64).collect());
     let open = get_f64_col(&df, "open")?;
     let high = get_f64_col(&df, "high")?;
     let low = get_f64_col(&df, "low")?;
     let close = get_f64_col(&df, "close")?;
-
-    let regime_family = get_string_col_any(&df, &["regime_family", "frozen_broad_regime_family"])?;
-    let regime_tuple = get_string_or_numeric_as_string_any(&df, &["regime_tuple", "frozen_regime_tuple"])?;
-
-    let trend_state = get_i64_col_any(&df, &["trend_state", "frozen_trend_state"])?;
-    let intermediate_state = get_i64_col_any(&df, &["intermediate_state", "frozen_intermediate_state"])?;
-    let accel_state = get_i64_col_any(&df, &["accel_state", "frozen_accel_state"])?;
+    let regime_family = get_string_col(&df, "regime_family")?;
+    let regime_tuple = get_string_or_numeric_as_string(&df, "regime_tuple")?;
+    let trend_state = get_i64_col(&df, "trend_state")?;
+    let intermediate_state = get_i64_col(&df, "intermediate_state")?;
+    let accel_state = get_i64_col(&df, "accel_state")?;
 
     Ok(MarketData {
         timestamp,
@@ -353,26 +343,15 @@ fn load_market_data(path: &Path) -> Result<MarketData> {
 }
 
 fn get_f64_col(df: &DataFrame, name: &str) -> Result<Vec<f64>> {
-    let s = df.column(name)?;
-    let casted = s.cast(&DataType::Float64)?;
-    let ca = casted.f64()?;
+    let s = df.column(name)?.cast(&DataType::Float64)?;
+    let ca = s.f64()?;
     Ok(ca.into_iter().map(|v| v.unwrap_or(f64::NAN)).collect())
 }
 
 fn get_i64_col(df: &DataFrame, name: &str) -> Result<Vec<i64>> {
-    let s = df.column(name)?;
-    let casted = s.cast(&DataType::Int64)?;
-    let ca = casted.i64()?;
+    let s = df.column(name)?.cast(&DataType::Int64)?;
+    let ca = s.i64()?;
     Ok(ca.into_iter().map(|v| v.unwrap_or(0)).collect())
-}
-
-fn get_i64_col_any(df: &DataFrame, names: &[&str]) -> Result<Vec<i64>> {
-    for name in names {
-        if df.column(name).is_ok() {
-            return get_i64_col(df, name);
-        }
-    }
-    Err(anyhow!("Missing any i64 column from candidates: {:?}", names))
 }
 
 fn get_string_col(df: &DataFrame, name: &str) -> Result<Vec<String>> {
@@ -381,22 +360,13 @@ fn get_string_col(df: &DataFrame, name: &str) -> Result<Vec<String>> {
     Ok(ca.into_iter().map(|v| v.unwrap_or("").to_string()).collect())
 }
 
-fn get_string_col_any(df: &DataFrame, names: &[&str]) -> Result<Vec<String>> {
-    for name in names {
-        if df.column(name).is_ok() {
-            return get_string_col(df, name);
-        }
-    }
-    Err(anyhow!("Missing any string column from candidates: {:?}", names))
-}
-
 fn get_string_or_numeric_as_string(df: &DataFrame, name: &str) -> Result<Vec<String>> {
     let s = df.column(name)?;
     match s.dtype() {
         DataType::String => get_string_col(df, name),
         _ => {
-            let casted = s.cast(&DataType::Float64)?;
-            let ca = casted.f64()?;
+            let f = s.cast(&DataType::Float64)?;
+            let ca = f.f64()?;
             Ok(ca
                 .into_iter()
                 .map(|v| match v {
@@ -409,29 +379,9 @@ fn get_string_or_numeric_as_string(df: &DataFrame, name: &str) -> Result<Vec<Str
     }
 }
 
-fn get_string_or_numeric_as_string_any(df: &DataFrame, names: &[&str]) -> Result<Vec<String>> {
-    for name in names {
-        if df.column(name).is_ok() {
-            return get_string_or_numeric_as_string(df, name);
-        }
-    }
-    Err(anyhow!(
-        "Missing any string/numeric-as-string column from candidates: {:?}",
-        names
-    ))
-}
-
-fn operand_value(market: &MarketData, operand: &RuleOperand, i: usize) -> Result<f64> {
-    match operand {
-        RuleOperand::Column(name) => Ok(market.f64_col(name)?[i]),
-        RuleOperand::Number(x) => Ok(*x),
-    }
-}
-
 fn evaluate_strategy(market: &MarketData, strategy: &StrategyConfig) -> Result<Vec<TradeRecord>> {
     let mut trades = Vec::new();
     let n = market.len();
-
     if n < 3 {
         return Ok(trades);
     }
@@ -441,9 +391,7 @@ fn evaluate_strategy(market: &MarketData, strategy: &StrategyConfig) -> Result<V
     let mut i: usize = 1;
 
     while i + 1 < n {
-        if !passes_entry_signal(market, &strategy.entry_rule, i)?
-            || !passes_filters(market, &strategy.filters, i)?
-        {
+        if !passes_entry_signal(market, &strategy.entry_rule, i)? || !passes_filters(market, &strategy.filters, i)? {
             i += 1;
             continue;
         }
@@ -464,21 +412,9 @@ fn evaluate_strategy(market: &MarketData, strategy: &StrategyConfig) -> Result<V
         let exit_price = exit.1;
         let exit_reason = exit.2;
 
-        let gross_pnl = calc_gross_pnl(
-            entry_price,
-            exit_price,
-            &side,
-            contracts,
-            strategy.costs.point_value,
-        );
-
+        let gross_pnl = calc_gross_pnl(entry_price, exit_price, &side, contracts, strategy.costs.point_value);
         let commission = strategy.costs.commission_round_trip * contracts as f64;
-        let slippage_cost = strategy.costs.slippage_ticks
-            * strategy.costs.tick_size
-            * strategy.costs.point_value
-            * contracts as f64
-            * 2.0;
-
+        let slippage_cost = strategy.costs.slippage_ticks * strategy.costs.tick_size * strategy.costs.point_value * contracts as f64 * 2.0;
         let net_pnl = gross_pnl - commission - slippage_cost;
 
         trades.push(TradeRecord {
@@ -507,6 +443,7 @@ fn evaluate_strategy(market: &MarketData, strategy: &StrategyConfig) -> Result<V
             entry_accel_state: market.accel_state[entry_i],
         });
 
+        // No overlapping positions. Resume after exit.
         i = exit_i + 1;
     }
 
@@ -514,72 +451,21 @@ fn evaluate_strategy(market: &MarketData, strategy: &StrategyConfig) -> Result<V
 }
 
 fn passes_entry_signal(market: &MarketData, entry: &EntryRule, i: usize) -> Result<bool> {
+    let left = market.f64_col(&entry.left)?;
+    let right = market.f64_col(&entry.right)?;
+
+    let l_prev = left[i - 1];
+    let r_prev = right[i - 1];
+    let l_now = left[i];
+    let r_now = right[i];
+
+    if !(l_prev.is_finite() && r_prev.is_finite() && l_now.is_finite() && r_now.is_finite()) {
+        return Ok(false);
+    }
+
     match entry.rule_type.as_str() {
-        "threshold" => {
-            let column = entry
-                .column
-                .as_ref()
-                .ok_or_else(|| anyhow!("threshold entry missing column"))?;
-
-            let op = entry
-                .operator
-                .as_ref()
-                .ok_or_else(|| anyhow!("threshold entry missing operator"))?;
-
-            let value = entry
-                .value
-                .ok_or_else(|| anyhow!("threshold entry missing value"))?;
-
-            let col = market.f64_col(column)?;
-            Ok(compare_f64(col[i], op, value))
-        }
-
-        "cross_above" | "price_cross_above" => {
-            let left_operand = entry
-                .left
-                .as_ref()
-                .ok_or_else(|| anyhow!("cross_above entry missing left"))?;
-
-            let right_operand = entry
-                .right
-                .as_ref()
-                .ok_or_else(|| anyhow!("cross_above entry missing right"))?;
-
-            let l_prev = operand_value(market, left_operand, i - 1)?;
-            let r_prev = operand_value(market, right_operand, i - 1)?;
-            let l_now = operand_value(market, left_operand, i)?;
-            let r_now = operand_value(market, right_operand, i)?;
-
-            if !(l_prev.is_finite() && r_prev.is_finite() && l_now.is_finite() && r_now.is_finite()) {
-                return Ok(false);
-            }
-
-            Ok(l_prev <= r_prev && l_now > r_now)
-        }
-
-        "cross_below" | "price_cross_below" => {
-            let left_operand = entry
-                .left
-                .as_ref()
-                .ok_or_else(|| anyhow!("cross_below entry missing left"))?;
-
-            let right_operand = entry
-                .right
-                .as_ref()
-                .ok_or_else(|| anyhow!("cross_below entry missing right"))?;
-
-            let l_prev = operand_value(market, left_operand, i - 1)?;
-            let r_prev = operand_value(market, right_operand, i - 1)?;
-            let l_now = operand_value(market, left_operand, i)?;
-            let r_now = operand_value(market, right_operand, i)?;
-
-            if !(l_prev.is_finite() && r_prev.is_finite() && l_now.is_finite() && r_now.is_finite()) {
-                return Ok(false);
-            }
-
-            Ok(l_prev >= r_prev && l_now < r_now)
-        }
-
+        "cross_above" | "price_cross_above" => Ok(l_prev <= r_prev && l_now > r_now),
+        "cross_below" | "price_cross_below" => Ok(l_prev >= r_prev && l_now < r_now),
         other => Err(anyhow!("Unsupported entry rule type: {}", other)),
     }
 }
@@ -588,55 +474,26 @@ fn passes_filters(market: &MarketData, filters: &[FilterRule], i: usize) -> Resu
     for filter in filters {
         let ok = match filter.filter_type.as_str() {
             "threshold" => {
-                let column = filter
-                    .column
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("threshold filter missing column"))?;
-
-                let op = filter
-                    .operator
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("threshold filter missing operator"))?;
-
-                let value = filter
-                    .value
-                    .ok_or_else(|| anyhow!("threshold filter missing value"))?;
-
+                let column = filter.column.as_ref().ok_or_else(|| anyhow!("threshold filter missing column"))?;
+                let op = filter.operator.as_ref().ok_or_else(|| anyhow!("threshold filter missing operator"))?;
+                let value = filter.value.ok_or_else(|| anyhow!("threshold filter missing value"))?;
                 let col = market.f64_col(column)?;
                 compare_f64(col[i], op, value)
             }
-
             "comparison" => {
-                let left_name = filter
-                    .left
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("comparison filter missing left"))?;
-
-                let right_name = filter
-                    .right
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("comparison filter missing right"))?;
-
-                let op = filter
-                    .operator
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("comparison filter missing operator"))?;
-
+                let left_name = filter.left.as_ref().ok_or_else(|| anyhow!("comparison filter missing left"))?;
+                let right_name = filter.right.as_ref().ok_or_else(|| anyhow!("comparison filter missing right"))?;
+                let op = filter.operator.as_ref().ok_or_else(|| anyhow!("comparison filter missing operator"))?;
                 let left = market.f64_col(left_name)?;
                 let right = market.f64_col(right_name)?;
-
                 compare_f64(left[i], op, right[i])
             }
-
             "regime_family_in" => {
-                let values = filter
-                    .values
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("regime filter missing values"))?;
-
-                values.iter().any(|v| v == &market.regime_family[i])
+                let column = filter.column.as_deref().unwrap_or("regime_family");
+                let values = filter.values.as_ref().ok_or_else(|| anyhow!("regime filter missing values"))?;
+                let col = market.string_col(column)?;
+                values.iter().any(|v| v == &col[i])
             }
-
             other => return Err(anyhow!("Unsupported filter type: {}", other)),
         };
 
@@ -644,7 +501,6 @@ fn passes_filters(market: &MarketData, filters: &[FilterRule], i: usize) -> Resu
             return Ok(false);
         }
     }
-
     Ok(true)
 }
 
@@ -652,7 +508,6 @@ fn compare_f64(left: f64, op: &str, right: f64) -> bool {
     if !(left.is_finite() && right.is_finite()) {
         return false;
     }
-
     match op {
         ">" => left > right,
         ">=" => left >= right,
@@ -677,26 +532,17 @@ fn find_exit(
 
     match strategy.exit_rule.exit_type.as_str() {
         "time_stop" => Ok((max_exit_i, market.close[max_exit_i], "time_stop".to_string())),
-
         "opposite_cross" => {
-            let left_operand = strategy
-                .exit_rule
-                .left
-                .as_ref()
-                .ok_or_else(|| anyhow!("opposite_cross missing left"))?;
-
-            let right_operand = strategy
-                .exit_rule
-                .right
-                .as_ref()
-                .ok_or_else(|| anyhow!("opposite_cross missing right"))?;
+            let left_name = strategy.exit_rule.left.as_ref().ok_or_else(|| anyhow!("opposite_cross missing left"))?;
+            let right_name = strategy.exit_rule.right.as_ref().ok_or_else(|| anyhow!("opposite_cross missing right"))?;
+            let left = market.f64_col(left_name)?;
+            let right = market.f64_col(right_name)?;
 
             for j in (entry_i + 1)..=max_exit_i {
-                let l_prev = operand_value(market, left_operand, j - 1)?;
-                let r_prev = operand_value(market, right_operand, j - 1)?;
-                let l_now = operand_value(market, left_operand, j)?;
-                let r_now = operand_value(market, right_operand, j)?;
-
+                let l_prev = left[j - 1];
+                let r_prev = right[j - 1];
+                let l_now = left[j];
+                let r_now = right[j];
                 if !(l_prev.is_finite() && r_prev.is_finite() && l_now.is_finite() && r_now.is_finite()) {
                     continue;
                 }
@@ -712,24 +558,13 @@ fn find_exit(
                     return Ok((exit_i, market.open[exit_i], "opposite_cross".to_string()));
                 }
             }
-
-            Ok((
-                max_exit_i,
-                market.close[max_exit_i],
-                "time_stop_after_no_opposite_cross".to_string(),
-            ))
+            Ok((max_exit_i, market.close[max_exit_i], "time_stop_after_no_opposite_cross".to_string()))
         }
-
         "fixed_rr_atr_stop" => {
             let atr_col = strategy.exit_rule.atr_column.as_deref().unwrap_or("atr_14");
             let atr = market.f64_col(atr_col)?[entry_i];
-
             if !atr.is_finite() || atr <= 0.0 {
-                return Ok((
-                    max_exit_i,
-                    market.close[max_exit_i],
-                    "time_stop_invalid_atr".to_string(),
-                ));
+                return Ok((max_exit_i, market.close[max_exit_i], "time_stop_invalid_atr".to_string()));
             }
 
             let stop_mult = strategy.exit_rule.stop_atr_multiple.unwrap_or(1.5);
@@ -750,8 +585,8 @@ fn find_exit(
                 if side == "long" {
                     let hit_stop = low <= stop_price;
                     let hit_target = high >= target_price;
-
                     if hit_stop && hit_target {
+                        // Conservative same-bar tie-break: assume stop first.
                         return Ok((j, stop_price, "stop_same_bar_tie".to_string()));
                     } else if hit_stop {
                         return Ok((j, stop_price, "stop".to_string()));
@@ -761,7 +596,6 @@ fn find_exit(
                 } else {
                     let hit_stop = high >= stop_price;
                     let hit_target = low <= target_price;
-
                     if hit_stop && hit_target {
                         return Ok((j, stop_price, "stop_same_bar_tie".to_string()));
                     } else if hit_stop {
@@ -772,38 +606,22 @@ fn find_exit(
                 }
             }
 
-            Ok((
-                max_exit_i,
-                market.close[max_exit_i],
-                "time_stop_after_no_stop_target".to_string(),
-            ))
+            Ok((max_exit_i, market.close[max_exit_i], "time_stop_after_no_stop_target".to_string()))
         }
-
         other => Err(anyhow!("Unsupported exit rule type: {}", other)),
     }
 }
 
-fn calc_gross_pnl(
-    entry_price: f64,
-    exit_price: f64,
-    side: &str,
-    contracts: i32,
-    point_value: f64,
-) -> f64 {
+fn calc_gross_pnl(entry_price: f64, exit_price: f64, side: &str, contracts: i32, point_value: f64) -> f64 {
     let points = if side == "long" {
         exit_price - entry_price
     } else {
         entry_price - exit_price
     };
-
     points * point_value * contracts as f64
 }
 
-fn summarize_by_group(
-    strategy: &StrategyConfig,
-    trades: &[TradeRecord],
-    group: &str,
-) -> Vec<PerformanceRecord> {
+fn summarize_by_group(strategy: &StrategyConfig, trades: &[TradeRecord], group: &str) -> Vec<PerformanceRecord> {
     let mut map: HashMap<String, Vec<TradeRecord>> = HashMap::new();
 
     for t in trades {
@@ -812,16 +630,13 @@ fn summarize_by_group(
             "regime_tuple" => t.entry_regime_tuple.clone(),
             _ => "UNKNOWN".to_string(),
         };
-
         map.entry(key).or_default().push(t.clone());
     }
 
     let mut out = Vec::new();
-
     for (key, group_trades) in map {
         out.push(summarize_performance(strategy, &group_trades, group, &key));
     }
-
     out
 }
 
@@ -832,7 +647,6 @@ fn summarize_performance(
     group_value: &str,
 ) -> PerformanceRecord {
     let trade_count = trades.len();
-
     let mut gross_profit = 0.0;
     let mut gross_loss = 0.0;
     let mut net_profit = 0.0;
@@ -846,49 +660,25 @@ fn summarize_performance(
         let pnl = t.net_pnl;
         net_profit += pnl;
         equity += pnl;
-
         if pnl > 0.0 {
             gross_profit += pnl;
             wins += 1;
         } else if pnl < 0.0 {
             gross_loss += pnl.abs();
         }
-
         if equity > peak {
             peak = equity;
         }
-
         let dd = peak - equity;
         if dd > max_drawdown {
             max_drawdown = dd;
         }
     }
 
-    let np_dd = if max_drawdown > 0.0 {
-        net_profit / max_drawdown
-    } else {
-        0.0
-    };
-
-    let win_rate = if trade_count > 0 {
-        wins as f64 / trade_count as f64
-    } else {
-        0.0
-    };
-
-    let avg_trade = if trade_count > 0 {
-        net_profit / trade_count as f64
-    } else {
-        0.0
-    };
-
-    let profit_factor = if gross_loss > 0.0 {
-        gross_profit / gross_loss
-    } else if gross_profit > 0.0 {
-        999.0
-    } else {
-        0.0
-    };
+    let np_dd = if max_drawdown > 0.0 { net_profit / max_drawdown } else { 0.0 };
+    let win_rate = if trade_count > 0 { wins as f64 / trade_count as f64 } else { 0.0 };
+    let avg_trade = if trade_count > 0 { net_profit / trade_count as f64 } else { 0.0 };
+    let profit_factor = if gross_loss > 0.0 { gross_profit / gross_loss } else if gross_profit > 0.0 { 999.0 } else { 0.0 };
 
     PerformanceRecord {
         strategy_id: strategy.strategy_id.clone(),
@@ -910,13 +700,10 @@ fn summarize_performance(
 fn write_csv<T: Serialize>(path: &Path, records: &[T]) -> Result<()> {
     let mut file = File::create(path)?;
     let mut writer = csv::Writer::from_writer(&mut file);
-
     for r in records {
         writer.serialize(r)?;
     }
-
     writer.flush()?;
     println!("Wrote: {}", path.display());
-
     Ok(())
 }

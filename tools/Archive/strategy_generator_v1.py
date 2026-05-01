@@ -1,7 +1,28 @@
 # ============================================================
 # Strategy Generator
 # Regime-Aware Strategy Discovery Pipeline
-# v2 momentum-enabled, v1-safe
+# ============================================================
+#
+# Recommended save location:
+# C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\tools\strategy_generator.py
+#
+# Purpose:
+#   Generate randomized strategy configs from available feature columns.
+#   Avoid duplicate parameter combinations using a stable hash.
+#   Track all generated/evaluated strategies in a CSV registry.
+#   Write a daily Rust-ready JSON batch.
+#
+# Inputs:
+#   C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\02_features\feature_dataset_core.parquet
+#
+# Outputs:
+#   C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\03_strategy_registry\strategy_combinations.csv
+#   C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\04_rust_inputs\strategy_batch_YYYYMMDD_HHMMSS.json
+#
+# Run examples:
+#   python strategy_generator.py --batch-size 100
+#   python strategy_generator.py --batch-size 500 --seed 42
+#   python strategy_generator.py --batch-size 100 --include-regime-specialists
 # ============================================================
 
 from __future__ import annotations
@@ -19,10 +40,7 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(r"C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery")
-
-CORE_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_core.parquet"
-V2_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v2.parquet"
-
+FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_core.parquet"
 REGISTRY_PATH = PROJECT_ROOT / "03_strategy_registry" / "strategy_combinations.csv"
 RUST_INPUT_DIR = PROJECT_ROOT / "04_rust_inputs"
 
@@ -43,6 +61,7 @@ REGIME_FAMILIES = [
 ]
 
 
+# These are the core feature columns produced by indicators/core.py.
 MA_TYPES = ["sma", "ema", "wma", "zlema"]
 MA_PERIODS = [10, 20, 40, 50, 100, 200]
 
@@ -51,7 +70,7 @@ CHOP_COL = "choppiness_14"
 ATR_COL = "atr_14"
 
 
-BASE_ENTRY_RULE_TYPES = [
+ENTRY_RULE_TYPES = [
     "cross_above",
     "cross_below",
     "price_cross_above",
@@ -62,38 +81,12 @@ BASE_ENTRY_RULE_TYPES = [
     "bollinger_mean_revert_short",
 ]
 
-MOMENTUM_ENTRY_RULE_TYPES = [
-    "rsi_oversold_long",
-    "rsi_overbought_short",
-    "rsi_cross_above",
-    "rsi_cross_below",
-    "macd_cross_above",
-    "macd_cross_below",
-    "stoch_cross_above",
-    "stoch_cross_below",
-    "cci_reversal_long",
-    "cci_reversal_short",
-    "cci_trend_long",
-    "cci_trend_short",
-]
-
-BASE_FILTER_TYPES = [
+FILTER_TYPES = [
     "none",
     "choppiness_below",
     "choppiness_above",
     "trend_above_ma",
     "trend_below_ma",
-]
-
-MOMENTUM_FILTER_TYPES = [
-    "roc_positive",
-    "roc_negative",
-    "rsi_above",
-    "rsi_below",
-    "macd_hist_positive",
-    "macd_hist_negative",
-    "cci_above_zero",
-    "cci_below_zero",
 ]
 
 EXIT_RULE_TYPES = [
@@ -143,6 +136,10 @@ class GeneratedStrategy:
     error_message: str = ""
 
 
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -188,65 +185,31 @@ def load_feature_columns(path: Path) -> list[str]:
     return parquet_file.schema.names
 
 
-def validate_required_columns(columns: list[str], use_v2_features: bool) -> None:
-    required = [
-        "open",
-        "high",
-        "low",
-        "close",
-        ATR_COL,
-        CHOP_COL,
-        f"{BOLLINGER_PREFIX}_upper",
-        f"{BOLLINGER_PREFIX}_lower",
-    ]
-
-    has_regime_family = (
-        "regime_family" in columns
-        or "frozen_broad_regime_family" in columns
-    )
-
-    has_regime_tuple = (
-        "regime_tuple" in columns
-        or "frozen_regime_tuple" in columns
-    )
-
-    if not has_regime_family:
-        required.append("regime_family")
-
-    if not has_regime_tuple:
-        required.append("regime_tuple")
-
-    if use_v2_features:
-        required += [
-            "rsi_14",
-            "roc_14",
-            "cci_20",
-            "stoch_k_14_3",
-            "stoch_d_14_3_3",
-            "macd_line_12_26_9",
-            "macd_signal_12_26_9",
-            "macd_hist_12_26_9",
-        ]
-
+def validate_required_columns(columns: list[str]) -> None:
+    required = ["open", "high", "low", "close", "regime_family", "regime_tuple", ATR_COL, CHOP_COL]
     missing = [c for c in required if c not in columns]
     if missing:
         raise ValueError(f"Feature dataset missing required columns: {missing}")
 
 
+# ------------------------------------------------------------
+# Random strategy construction
+# ------------------------------------------------------------
+
 def random_ma_pair(rng: random.Random) -> tuple[str, str]:
     ma_type_1 = rng.choice(MA_TYPES)
     ma_type_2 = rng.choice(MA_TYPES)
     p1, p2 = rng.sample(MA_PERIODS, 2)
+
+    # Prefer directional fast/slow pairs for cross rules.
     fast, slow = sorted([p1, p2])
-    return ma_col(ma_type_1, fast), ma_col(ma_type_2, slow)
+    left = ma_col(ma_type_1, fast)
+    right = ma_col(ma_type_2, slow)
+    return left, right
 
 
-def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, Any]:
-    rule_types = BASE_ENTRY_RULE_TYPES.copy()
-    if use_v2_features:
-        rule_types += MOMENTUM_ENTRY_RULE_TYPES
-
-    rule_type = rng.choice(rule_types)
+def random_entry_rule(rng: random.Random) -> dict[str, Any]:
+    rule_type = rng.choice(ENTRY_RULE_TYPES)
 
     if rule_type in {"cross_above", "cross_below"}:
         left, right = random_ma_pair(rng)
@@ -259,21 +222,23 @@ def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, An
         }
 
     if rule_type == "price_cross_above":
+        ma_type = rng.choice(MA_TYPES)
+        period = rng.choice(MA_PERIODS)
         return {
-            "type": "cross_above",
+            "type": rule_type,
             "side": "long",
             "left": "close",
-            "right": ma_col(rng.choice(MA_TYPES), rng.choice(MA_PERIODS)),
-            "template": rule_type,
+            "right": ma_col(ma_type, period),
         }
 
     if rule_type == "price_cross_below":
+        ma_type = rng.choice(MA_TYPES)
+        period = rng.choice(MA_PERIODS)
         return {
-            "type": "cross_below",
+            "type": rule_type,
             "side": "short",
             "left": "close",
-            "right": ma_col(rng.choice(MA_TYPES), rng.choice(MA_PERIODS)),
-            "template": rule_type,
+            "right": ma_col(ma_type, period),
         }
 
     if rule_type == "bollinger_breakout_long":
@@ -312,129 +277,11 @@ def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, An
             "template": rule_type,
         }
 
-    if rule_type == "rsi_oversold_long":
-        threshold = rng.choice([25.0, 30.0, 35.0])
-        return {
-            "type": "cross_below",
-            "side": "long",
-            "left": "rsi_14",
-            "right": threshold,
-            "template": rule_type,
-        }
-
-    if rule_type == "rsi_overbought_short":
-        threshold = rng.choice([65.0, 70.0, 75.0])
-        return {
-            "type": "cross_above",
-            "side": "short",
-            "left": "rsi_14",
-            "right": threshold,
-            "template": rule_type,
-        }
-
-    if rule_type == "rsi_cross_above":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "rsi_14",
-            "right": rng.choice([30.0, 40.0, 50.0]),
-            "template": rule_type,
-        }
-
-    if rule_type == "rsi_cross_below":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "rsi_14",
-            "right": rng.choice([50.0, 60.0, 70.0]),
-            "template": rule_type,
-        }
-
-    if rule_type == "macd_cross_above":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "macd_line_12_26_9",
-            "right": "macd_signal_12_26_9",
-            "template": rule_type,
-        }
-
-    if rule_type == "macd_cross_below":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "macd_line_12_26_9",
-            "right": "macd_signal_12_26_9",
-            "template": rule_type,
-        }
-
-    if rule_type == "stoch_cross_above":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "stoch_k_14_3",
-            "right": "stoch_d_14_3_3",
-            "template": rule_type,
-        }
-
-    if rule_type == "stoch_cross_below":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "stoch_k_14_3",
-            "right": "stoch_d_14_3_3",
-            "template": rule_type,
-        }
-
-    if rule_type == "cci_reversal_long":
-        threshold = rng.choice([-200.0, -150.0, -100.0])
-        return {
-            "type": "cross_below",
-            "side": "long",
-            "left": "cci_20",
-            "right": threshold,
-            "template": rule_type,
-        }
-
-    if rule_type == "cci_reversal_short":
-        threshold = rng.choice([100.0, 150.0, 200.0])
-        return {
-            "type": "cross_above",
-            "side": "short",
-            "left": "cci_20",
-            "right": threshold,
-            "template": rule_type,
-        }
-
-    if rule_type == "cci_trend_long":
-        return {
-            "type": "threshold",
-            "side": "long",
-            "column": "cci_20",
-            "operator": ">",
-            "value": rng.choice([0.0, 50.0, 100.0]),
-            "template": rule_type,
-        }
-
-    if rule_type == "cci_trend_short":
-        return {
-            "type": "threshold",
-            "side": "short",
-            "column": "cci_20",
-            "operator": "<",
-            "value": rng.choice([0.0, -50.0, -100.0]),
-            "template": rule_type,
-        }
-
     raise ValueError(f"Unhandled entry rule type: {rule_type}")
 
 
-def random_filter(rng: random.Random, use_v2_features: bool) -> Optional[dict[str, Any]]:
-    filter_types = BASE_FILTER_TYPES.copy()
-    if use_v2_features:
-        filter_types += MOMENTUM_FILTER_TYPES
-
-    filter_type = rng.choice(filter_types)
+def random_filter(rng: random.Random) -> Optional[dict[str, Any]]:
+    filter_type = rng.choice(FILTER_TYPES)
 
     if filter_type == "none":
         return None
@@ -471,70 +318,6 @@ def random_filter(rng: random.Random, use_v2_features: bool) -> Optional[dict[st
             "right": ma_col(rng.choice(MA_TYPES), rng.choice([40, 50, 100, 200])),
         }
 
-    if filter_type == "roc_positive":
-        return {
-            "type": "threshold",
-            "column": "roc_14",
-            "operator": ">",
-            "value": rng.choice([0.0, 0.05, 0.10, 0.20]),
-        }
-
-    if filter_type == "roc_negative":
-        return {
-            "type": "threshold",
-            "column": "roc_14",
-            "operator": "<",
-            "value": rng.choice([0.0, -0.05, -0.10, -0.20]),
-        }
-
-    if filter_type == "rsi_above":
-        return {
-            "type": "threshold",
-            "column": "rsi_14",
-            "operator": ">",
-            "value": rng.choice([50.0, 55.0, 60.0]),
-        }
-
-    if filter_type == "rsi_below":
-        return {
-            "type": "threshold",
-            "column": "rsi_14",
-            "operator": "<",
-            "value": rng.choice([50.0, 45.0, 40.0]),
-        }
-
-    if filter_type == "macd_hist_positive":
-        return {
-            "type": "threshold",
-            "column": "macd_hist_12_26_9",
-            "operator": ">",
-            "value": 0.0,
-        }
-
-    if filter_type == "macd_hist_negative":
-        return {
-            "type": "threshold",
-            "column": "macd_hist_12_26_9",
-            "operator": "<",
-            "value": 0.0,
-        }
-
-    if filter_type == "cci_above_zero":
-        return {
-            "type": "threshold",
-            "column": "cci_20",
-            "operator": ">",
-            "value": 0.0,
-        }
-
-    if filter_type == "cci_below_zero":
-        return {
-            "type": "threshold",
-            "column": "cci_20",
-            "operator": "<",
-            "value": 0.0,
-        }
-
     raise ValueError(f"Unhandled filter type: {filter_type}")
 
 
@@ -558,19 +341,18 @@ def random_exit_rule(rng: random.Random, entry_rule: dict[str, Any]) -> dict[str
             "max_bars_in_trade": rng.choice([60, 120, 240, 390, 780]),
         }
 
+    # Safe fallback for entries that do not have a clean opposite cross.
     return {
         "type": "time_stop",
         "max_bars_in_trade": rng.choice([30, 60, 120, 240, 390, 780]),
     }
 
 
-def random_regime_filter(
-    rng: random.Random,
-    include_specialists: bool,
-) -> tuple[str, str, Optional[dict[str, Any]]]:
+def random_regime_filter(rng: random.Random, include_specialists: bool) -> tuple[str, str, Optional[dict[str, Any]]]:
     if not include_specialists:
         return "all", "ALL", None
 
+    # Generate both broad ALL and specialist variants over time.
     mode = rng.choices(["all", "family"], weights=[0.35, 0.65], k=1)[0]
 
     if mode == "all":
@@ -591,17 +373,13 @@ def random_regime_filter(
 def build_strategy_config(
     rng: random.Random,
     include_regime_specialists: bool,
-    use_v2_features: bool,
     instrument: str = "NQ",
     timeframe: str = "1min",
 ) -> dict[str, Any]:
-    entry = random_entry_rule(rng, use_v2_features=use_v2_features)
-    filt = random_filter(rng, use_v2_features=use_v2_features)
+    entry = random_entry_rule(rng)
+    filt = random_filter(rng)
     exit_rule = random_exit_rule(rng, entry)
-    regime_filter_type, regime_filter_value, regime_filter = random_regime_filter(
-        rng,
-        include_regime_specialists,
-    )
+    regime_filter_type, regime_filter_value, regime_filter = random_regime_filter(rng, include_regime_specialists)
 
     filters = []
     if filt is not None:
@@ -612,8 +390,7 @@ def build_strategy_config(
     config = {
         "instrument": instrument,
         "timeframe": timeframe,
-        "engine_version": "strategy_generator_v2_momentum" if use_v2_features else "strategy_generator_v1",
-        "feature_version": "v2_momentum" if use_v2_features else "core",
+        "engine_version": "strategy_generator_v1",
         "entry_timing": "next_bar_open_after_signal",
         "regime_assignment": "entry_time_only",
         "costs": {
@@ -641,6 +418,10 @@ def build_strategy_config(
     return config
 
 
+# ------------------------------------------------------------
+# Batch generation
+# ------------------------------------------------------------
+
 def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
     ts = now_str()
     metadata = config.get("metadata", {})
@@ -653,7 +434,7 @@ def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
         status="pending",
         created_at=ts,
         updated_at=ts,
-        strategy_family="momentum_random_v2" if config.get("feature_version") == "v2_momentum" else "core_random_v1",
+        strategy_family="core_random_v1",
         entry_rule_type=entry_rule.get("template", entry_rule.get("type", "")),
         exit_rule_type=exit_rule.get("type", ""),
         regime_filter_type=metadata.get("regime_filter_type", "all"),
@@ -666,15 +447,12 @@ def generate_batch(
     batch_size: int,
     seed: Optional[int],
     include_regime_specialists: bool,
-    use_v2_features: bool,
     max_attempts_multiplier: int = 50,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame, Path]:
     rng = random.Random(seed)
 
-    feature_dataset_path = V2_FEATURE_DATASET_PATH if use_v2_features else CORE_FEATURE_DATASET_PATH
-
-    columns = load_feature_columns(feature_dataset_path)
-    validate_required_columns(columns, use_v2_features=use_v2_features)
+    columns = load_feature_columns(FEATURE_DATASET_PATH)
+    validate_required_columns(columns)
 
     registry = read_existing_registry(REGISTRY_PATH)
     existing_hashes = set(registry["parameter_hash"].astype(str).tolist()) if not registry.empty else set()
@@ -687,11 +465,7 @@ def generate_batch(
 
     while len(new_configs) < batch_size and attempts < max_attempts:
         attempts += 1
-        config = build_strategy_config(
-            rng,
-            include_regime_specialists=include_regime_specialists,
-            use_v2_features=use_v2_features,
-        )
+        config = build_strategy_config(rng, include_regime_specialists=include_regime_specialists)
         h = config["parameter_hash"]
 
         if h in existing_hashes:
@@ -716,8 +490,7 @@ def generate_batch(
 
     batch_payload = {
         "created_at": now_str(),
-        "feature_dataset_path": str(feature_dataset_path),
-        "feature_version": "v2_momentum" if use_v2_features else "core",
+        "feature_dataset_path": str(FEATURE_DATASET_PATH),
         "strategy_count": len(new_configs),
         "strategies": new_configs,
     }
@@ -736,11 +509,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include regime-family specialist strategy variants",
     )
-    parser.add_argument(
-        "--use-v2-features",
-        action="store_true",
-        help="Use feature_dataset_v2.parquet and enable momentum strategy templates",
-    )
     return parser.parse_args()
 
 
@@ -751,19 +519,13 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         seed=args.seed,
         include_regime_specialists=args.include_regime_specialists,
-        use_v2_features=args.use_v2_features,
     )
 
     print("Strategy batch generated.")
-    print(f"Feature version:   {'v2_momentum' if args.use_v2_features else 'core'}")
-    print(f"Batch size:        {len(configs):,}")
-    print(f"Registry path:     {REGISTRY_PATH}")
-    print(f"Registry rows:     {len(registry):,}")
-    print(f"Rust batch path:   {batch_path}")
-
+    print(f"Batch size:       {len(configs):,}")
+    print(f"Registry path:    {REGISTRY_PATH}")
+    print(f"Registry rows:    {len(registry):,}")
+    print(f"Rust batch path:  {batch_path}")
     if configs:
         print("First strategy:")
         print(json.dumps(configs[0], indent=2))
-        
-# python strategy_generator.py --batch-size 50
-# python strategy_generator.py --batch-size 50 --use-v2-features
