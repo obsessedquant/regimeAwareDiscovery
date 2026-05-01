@@ -1,7 +1,7 @@
 # ============================================================
 # Strategy Generator
 # Regime-Aware Strategy Discovery Pipeline
-# v2 momentum-enabled, v1-safe
+# v1 core + v2 momentum + v3 VWAP/ADX/volume/volatility
 # ============================================================
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(r"C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscover
 
 CORE_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_core.parquet"
 V2_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v2.parquet"
+V3_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v3.parquet"
 
 REGISTRY_PATH = PROJECT_ROOT / "03_strategy_registry" / "strategy_combinations.csv"
 RUST_INPUT_DIR = PROJECT_ROOT / "04_rust_inputs"
@@ -77,6 +78,15 @@ MOMENTUM_ENTRY_RULE_TYPES = [
     "cci_trend_short",
 ]
 
+V3_ENTRY_RULE_TYPES = [
+    "price_cross_above_vwap",
+    "price_cross_below_vwap",
+    "vwap_mean_revert_long",
+    "vwap_mean_revert_short",
+    "vwap_band_breakout_long",
+    "vwap_band_breakout_short",
+]
+
 BASE_FILTER_TYPES = [
     "none",
     "choppiness_below",
@@ -94,6 +104,20 @@ MOMENTUM_FILTER_TYPES = [
     "macd_hist_negative",
     "cci_above_zero",
     "cci_below_zero",
+]
+
+V3_FILTER_TYPES = [
+    "adx_above",
+    "adx_below",
+    "dmi_bullish",
+    "dmi_bearish",
+    "volume_ratio_above",
+    "obv_slope_positive",
+    "obv_slope_negative",
+    "atr_expansion",
+    "atr_contraction",
+    "price_above_vwap",
+    "price_below_vwap",
 ]
 
 EXIT_RULE_TYPES = [
@@ -143,6 +167,10 @@ class GeneratedStrategy:
     error_message: str = ""
 
 
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -188,7 +216,11 @@ def load_feature_columns(path: Path) -> list[str]:
     return parquet_file.schema.names
 
 
-def validate_required_columns(columns: list[str], use_v2_features: bool) -> None:
+def validate_required_columns(
+    columns: list[str],
+    use_v2_features: bool,
+    use_v3_features: bool,
+) -> None:
     required = [
         "open",
         "high",
@@ -216,7 +248,7 @@ def validate_required_columns(columns: list[str], use_v2_features: bool) -> None
     if not has_regime_tuple:
         required.append("regime_tuple")
 
-    if use_v2_features:
+    if use_v2_features or use_v3_features:
         required += [
             "rsi_14",
             "roc_14",
@@ -228,23 +260,58 @@ def validate_required_columns(columns: list[str], use_v2_features: bool) -> None
             "macd_hist_12_26_9",
         ]
 
+    if use_v3_features:
+        required += [
+            "vwap_session",
+            "vwap_distance",
+            "vwap_distance_pct",
+            "vwap_band_upper_20_1p0",
+            "vwap_band_lower_20_1p0",
+            "vwap_band_upper_20_2p0",
+            "vwap_band_lower_20_2p0",
+            "adx_14",
+            "plus_di_14",
+            "minus_di_14",
+            "dmi_spread_14",
+            "volume_ratio_20",
+            "obv_slope_10",
+            "atr_14_zscore_20",
+            "atr_14_expansion_20",
+            "atr_14_contraction_20",
+        ]
+
     missing = [c for c in required if c not in columns]
     if missing:
         raise ValueError(f"Feature dataset missing required columns: {missing}")
 
 
+# ------------------------------------------------------------
+# Random strategy construction
+# ------------------------------------------------------------
+
 def random_ma_pair(rng: random.Random) -> tuple[str, str]:
     ma_type_1 = rng.choice(MA_TYPES)
     ma_type_2 = rng.choice(MA_TYPES)
     p1, p2 = rng.sample(MA_PERIODS, 2)
+
     fast, slow = sorted([p1, p2])
-    return ma_col(ma_type_1, fast), ma_col(ma_type_2, slow)
+    left = ma_col(ma_type_1, fast)
+    right = ma_col(ma_type_2, slow)
+    return left, right
 
 
-def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, Any]:
+def random_entry_rule(
+    rng: random.Random,
+    use_v2_features: bool,
+    use_v3_features: bool,
+) -> dict[str, Any]:
     rule_types = BASE_ENTRY_RULE_TYPES.copy()
-    if use_v2_features:
+
+    if use_v2_features or use_v3_features:
         rule_types += MOMENTUM_ENTRY_RULE_TYPES
+
+    if use_v3_features:
+        rule_types += V3_ENTRY_RULE_TYPES
 
     rule_type = rng.choice(rule_types)
 
@@ -311,6 +378,10 @@ def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, An
             "right": f"{BOLLINGER_PREFIX}_upper",
             "template": rule_type,
         }
+
+    # -----------------------------
+    # Momentum entries
+    # -----------------------------
 
     if rule_type == "rsi_oversold_long":
         threshold = rng.choice([25.0, 30.0, 35.0])
@@ -426,13 +497,79 @@ def random_entry_rule(rng: random.Random, use_v2_features: bool) -> dict[str, An
             "template": rule_type,
         }
 
+    # -----------------------------
+    # v3 VWAP entries
+    # -----------------------------
+
+    if rule_type == "price_cross_above_vwap":
+        return {
+            "type": "cross_above",
+            "side": "long",
+            "left": "close",
+            "right": "vwap_session",
+            "template": rule_type,
+        }
+
+    if rule_type == "price_cross_below_vwap":
+        return {
+            "type": "cross_below",
+            "side": "short",
+            "left": "close",
+            "right": "vwap_session",
+            "template": rule_type,
+        }
+
+    if rule_type == "vwap_mean_revert_long":
+        return {
+            "type": "cross_above",
+            "side": "long",
+            "left": "close",
+            "right": rng.choice(["vwap_band_lower_20_1p0", "vwap_band_lower_20_2p0"]),
+            "template": rule_type,
+        }
+
+    if rule_type == "vwap_mean_revert_short":
+        return {
+            "type": "cross_below",
+            "side": "short",
+            "left": "close",
+            "right": rng.choice(["vwap_band_upper_20_1p0", "vwap_band_upper_20_2p0"]),
+            "template": rule_type,
+        }
+
+    if rule_type == "vwap_band_breakout_long":
+        return {
+            "type": "cross_above",
+            "side": "long",
+            "left": "close",
+            "right": rng.choice(["vwap_band_upper_20_1p0", "vwap_band_upper_20_2p0"]),
+            "template": rule_type,
+        }
+
+    if rule_type == "vwap_band_breakout_short":
+        return {
+            "type": "cross_below",
+            "side": "short",
+            "left": "close",
+            "right": rng.choice(["vwap_band_lower_20_1p0", "vwap_band_lower_20_2p0"]),
+            "template": rule_type,
+        }
+
     raise ValueError(f"Unhandled entry rule type: {rule_type}")
 
 
-def random_filter(rng: random.Random, use_v2_features: bool) -> Optional[dict[str, Any]]:
+def random_filter(
+    rng: random.Random,
+    use_v2_features: bool,
+    use_v3_features: bool,
+) -> Optional[dict[str, Any]]:
     filter_types = BASE_FILTER_TYPES.copy()
-    if use_v2_features:
+
+    if use_v2_features or use_v3_features:
         filter_types += MOMENTUM_FILTER_TYPES
+
+    if use_v3_features:
+        filter_types += V3_FILTER_TYPES
 
     filter_type = rng.choice(filter_types)
 
@@ -470,6 +607,10 @@ def random_filter(rng: random.Random, use_v2_features: bool) -> Optional[dict[st
             "operator": "<",
             "right": ma_col(rng.choice(MA_TYPES), rng.choice([40, 50, 100, 200])),
         }
+
+    # -----------------------------
+    # v2 momentum filters
+    # -----------------------------
 
     if filter_type == "roc_positive":
         return {
@@ -535,6 +676,98 @@ def random_filter(rng: random.Random, use_v2_features: bool) -> Optional[dict[st
             "value": 0.0,
         }
 
+    # -----------------------------
+    # v3 filters
+    # -----------------------------
+
+    if filter_type == "adx_above":
+        return {
+            "type": "threshold",
+            "column": "adx_14",
+            "operator": ">",
+            "value": rng.choice([20.0, 25.0, 30.0]),
+        }
+
+    if filter_type == "adx_below":
+        return {
+            "type": "threshold",
+            "column": "adx_14",
+            "operator": "<",
+            "value": rng.choice([15.0, 20.0, 25.0]),
+        }
+
+    if filter_type == "dmi_bullish":
+        return {
+            "type": "comparison",
+            "left": "plus_di_14",
+            "operator": ">",
+            "right": "minus_di_14",
+        }
+
+    if filter_type == "dmi_bearish":
+        return {
+            "type": "comparison",
+            "left": "minus_di_14",
+            "operator": ">",
+            "right": "plus_di_14",
+        }
+
+    if filter_type == "volume_ratio_above":
+        return {
+            "type": "threshold",
+            "column": "volume_ratio_20",
+            "operator": ">",
+            "value": rng.choice([1.2, 1.5, 2.0]),
+        }
+
+    if filter_type == "obv_slope_positive":
+        return {
+            "type": "threshold",
+            "column": "obv_slope_10",
+            "operator": ">",
+            "value": 0.0,
+        }
+
+    if filter_type == "obv_slope_negative":
+        return {
+            "type": "threshold",
+            "column": "obv_slope_10",
+            "operator": "<",
+            "value": 0.0,
+        }
+
+    if filter_type == "atr_expansion":
+        return {
+            "type": "threshold",
+            "column": "atr_14_zscore_20",
+            "operator": ">",
+            "value": rng.choice([0.5, 1.0, 1.5]),
+        }
+
+    if filter_type == "atr_contraction":
+        return {
+            "type": "threshold",
+            "column": "atr_14_zscore_20",
+            "operator": "<",
+            "value": rng.choice([-0.5, -1.0, -1.5]),
+        }
+
+    if filter_type == "price_above_vwap":
+        return {
+            "type": "comparison",
+            "left": "close",
+            "operator": ">",
+            "right": "vwap_session",
+        }
+
+    if filter_type == "price_below_vwap":
+        return {
+            "type": "comparison",
+            "left": "close",
+            "operator": "<",
+            "right": "vwap_session",
+        }
+
     raise ValueError(f"Unhandled filter type: {filter_type}")
 
 
@@ -588,15 +821,40 @@ def random_regime_filter(
     )
 
 
+def feature_version_label(use_v2_features: bool, use_v3_features: bool) -> str:
+    if use_v3_features:
+        return "v3_vwap_adx_volume_volatility"
+    if use_v2_features:
+        return "v2_momentum"
+    return "core"
+
+
+def engine_version_label(use_v2_features: bool, use_v3_features: bool) -> str:
+    if use_v3_features:
+        return "strategy_generator_v3"
+    if use_v2_features:
+        return "strategy_generator_v2_momentum"
+    return "strategy_generator_v1"
+
+
 def build_strategy_config(
     rng: random.Random,
     include_regime_specialists: bool,
     use_v2_features: bool,
+    use_v3_features: bool,
     instrument: str = "NQ",
     timeframe: str = "1min",
 ) -> dict[str, Any]:
-    entry = random_entry_rule(rng, use_v2_features=use_v2_features)
-    filt = random_filter(rng, use_v2_features=use_v2_features)
+    entry = random_entry_rule(
+        rng,
+        use_v2_features=use_v2_features,
+        use_v3_features=use_v3_features,
+    )
+    filt = random_filter(
+        rng,
+        use_v2_features=use_v2_features,
+        use_v3_features=use_v3_features,
+    )
     exit_rule = random_exit_rule(rng, entry)
     regime_filter_type, regime_filter_value, regime_filter = random_regime_filter(
         rng,
@@ -609,11 +867,14 @@ def build_strategy_config(
     if regime_filter is not None:
         filters.append(regime_filter)
 
+    feature_version = feature_version_label(use_v2_features, use_v3_features)
+    engine_version = engine_version_label(use_v2_features, use_v3_features)
+
     config = {
         "instrument": instrument,
         "timeframe": timeframe,
-        "engine_version": "strategy_generator_v2_momentum" if use_v2_features else "strategy_generator_v1",
-        "feature_version": "v2_momentum" if use_v2_features else "core",
+        "engine_version": engine_version,
+        "feature_version": feature_version,
         "entry_timing": "next_bar_open_after_signal",
         "regime_assignment": "entry_time_only",
         "costs": {
@@ -641,11 +902,23 @@ def build_strategy_config(
     return config
 
 
+# ------------------------------------------------------------
+# Batch generation
+# ------------------------------------------------------------
+
 def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
     ts = now_str()
     metadata = config.get("metadata", {})
     entry_rule = config.get("entry_rule", {})
     exit_rule = config.get("exit_rule", {})
+
+    feature_version = config.get("feature_version", "core")
+    if feature_version.startswith("v3"):
+        strategy_family = "v3_vwap_adx_volume_random"
+    elif feature_version == "v2_momentum":
+        strategy_family = "momentum_random_v2"
+    else:
+        strategy_family = "core_random_v1"
 
     return GeneratedStrategy(
         strategy_id=config["strategy_id"],
@@ -653,7 +926,7 @@ def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
         status="pending",
         created_at=ts,
         updated_at=ts,
-        strategy_family="momentum_random_v2" if config.get("feature_version") == "v2_momentum" else "core_random_v1",
+        strategy_family=strategy_family,
         entry_rule_type=entry_rule.get("template", entry_rule.get("type", "")),
         exit_rule_type=exit_rule.get("type", ""),
         regime_filter_type=metadata.get("regime_filter_type", "all"),
@@ -667,14 +940,24 @@ def generate_batch(
     seed: Optional[int],
     include_regime_specialists: bool,
     use_v2_features: bool,
+    use_v3_features: bool,
     max_attempts_multiplier: int = 50,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame, Path]:
     rng = random.Random(seed)
 
-    feature_dataset_path = V2_FEATURE_DATASET_PATH if use_v2_features else CORE_FEATURE_DATASET_PATH
+    if use_v3_features:
+        feature_dataset_path = V3_FEATURE_DATASET_PATH
+    elif use_v2_features:
+        feature_dataset_path = V2_FEATURE_DATASET_PATH
+    else:
+        feature_dataset_path = CORE_FEATURE_DATASET_PATH
 
     columns = load_feature_columns(feature_dataset_path)
-    validate_required_columns(columns, use_v2_features=use_v2_features)
+    validate_required_columns(
+        columns,
+        use_v2_features=use_v2_features,
+        use_v3_features=use_v3_features,
+    )
 
     registry = read_existing_registry(REGISTRY_PATH)
     existing_hashes = set(registry["parameter_hash"].astype(str).tolist()) if not registry.empty else set()
@@ -687,11 +970,14 @@ def generate_batch(
 
     while len(new_configs) < batch_size and attempts < max_attempts:
         attempts += 1
+
         config = build_strategy_config(
             rng,
             include_regime_specialists=include_regime_specialists,
             use_v2_features=use_v2_features,
+            use_v3_features=use_v3_features,
         )
+
         h = config["parameter_hash"]
 
         if h in existing_hashes:
@@ -714,10 +1000,12 @@ def generate_batch(
     RUST_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     batch_path = RUST_INPUT_DIR / f"strategy_batch_{batch_timestamp()}.json"
 
+    feature_version = feature_version_label(use_v2_features, use_v3_features)
+
     batch_payload = {
         "created_at": now_str(),
         "feature_dataset_path": str(feature_dataset_path),
-        "feature_version": "v2_momentum" if use_v2_features else "core",
+        "feature_version": feature_version,
         "strategy_count": len(new_configs),
         "strategies": new_configs,
     }
@@ -729,19 +1017,34 @@ def generate_batch(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate randomized strategy configs for Rust evaluation.")
+
     parser.add_argument("--batch-size", type=int, default=100, help="Number of new strategies to generate")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+
     parser.add_argument(
         "--include-regime-specialists",
         action="store_true",
         help="Include regime-family specialist strategy variants",
     )
+
     parser.add_argument(
         "--use-v2-features",
         action="store_true",
         help="Use feature_dataset_v2.parquet and enable momentum strategy templates",
     )
-    return parser.parse_args()
+
+    parser.add_argument(
+        "--use-v3-features",
+        action="store_true",
+        help="Use feature_dataset_v3.parquet and enable VWAP/ADX/volume/volatility templates",
+    )
+
+    args = parser.parse_args()
+
+    if args.use_v2_features and args.use_v3_features:
+        raise ValueError("Use either --use-v2-features or --use-v3-features, not both.")
+
+    return args
 
 
 if __name__ == "__main__":
@@ -752,10 +1055,13 @@ if __name__ == "__main__":
         seed=args.seed,
         include_regime_specialists=args.include_regime_specialists,
         use_v2_features=args.use_v2_features,
+        use_v3_features=args.use_v3_features,
     )
 
+    feature_version = feature_version_label(args.use_v2_features, args.use_v3_features)
+
     print("Strategy batch generated.")
-    print(f"Feature version:   {'v2_momentum' if args.use_v2_features else 'core'}")
+    print(f"Feature version:   {feature_version}")
     print(f"Batch size:        {len(configs):,}")
     print(f"Registry path:     {REGISTRY_PATH}")
     print(f"Registry rows:     {len(registry):,}")
@@ -765,5 +1071,4 @@ if __name__ == "__main__":
         print("First strategy:")
         print(json.dumps(configs[0], indent=2))
         
-# python strategy_generator.py --batch-size 50
-# python strategy_generator.py --batch-size 50 --use-v2-features
+# python strategy_generator.py --batch-size 25 --use-v3-features --seed 42
