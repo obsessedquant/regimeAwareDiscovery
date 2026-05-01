@@ -1,0 +1,7 @@
+Check these two other locations for any scripts that might be missing from this core location.
+
+C:\Users\srobi\GithubRepos\ninjatrader (probable)
+
+C:\Users\srobi\GithubRepos\trading_data\regimeBuilder6 (probable)
+
+C:\Users\srobi\GithubRepos\stratGen (possible but not probable)

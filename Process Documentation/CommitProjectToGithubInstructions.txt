@@ -1,0 +1,149 @@
+Yes — most project code we built is under:
+
+```text
+C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery
+```
+
+For GitHub backup, commit **code/config/docs**, not generated data/results.
+
+## Recommended GitHub structure
+
+Keep these:
+
+```text
+tools\
+indicators\
+rust_engine\
+README.md
+docs\
+```
+
+Do not commit these:
+
+```text
+01_canonical_data\
+02_features\
+04_rust_inputs\
+05_rust_outputs\
+06_candidates\
+07_portfolio\
+08_allocation\
+09_nt8_deployment\strategy_specs\
+09_nt8_deployment\generated_strategies\
+09_nt8_deployment\review_packages\
+*.parquet
+*.csv outputs
+```
+
+## Suggested `.gitignore`
+
+Create:
+
+```text
+C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery\.gitignore
+```
+
+Put this in it:
+
+```gitignore
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.*
+
+# Rust
+rust_engine/target/
+**/target/
+Cargo.lock
+
+# Data files
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.db
+*.sqlite
+*.sqlite3
+
+# Large/generated CSV outputs
+01_canonical_data/
+02_features/
+03_strategy_registry/*.csv
+04_rust_inputs/
+05_rust_outputs/
+06_candidates/
+07_portfolio/
+08_allocation/
+
+# NT8 generated deployment artifacts
+09_nt8_deployment/strategy_specs/
+09_nt8_deployment/generated_strategies/
+09_nt8_deployment/review_packages/
+09_nt8_deployment/*.csv
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+```
+
+## Files I would commit
+
+```text
+tools\*.py
+indicators\*.py
+indicators\custom\*.py
+rust_engine\Cargo.toml
+rust_engine\src\main.rs
+indicator_manifest.csv maybe optional
+indicator_conversion_plan.csv maybe optional
+```
+
+I would probably commit these two CSVs because they are lightweight project metadata:
+
+```text
+indicator_manifest.csv
+indicator_conversion_plan.csv
+```
+
+But do **not** commit result CSVs like:
+
+```text
+strategy_combinations.csv
+top_strategy_candidates_all.csv
+strategy_allocation_all.csv
+```
+
+## First Git commands
+
+```powershell
+cd "C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscovery"
+
+git init
+git add .gitignore
+git add tools indicators rust_engine Cargo.toml README.md
+git status
+git commit -m "Initial regime-aware strategy discovery pipeline"
+```
+
+For the Rust project, if `Cargo.toml` is inside `rust_engine`, use:
+
+```powershell
+git add rust_engine/Cargo.toml rust_engine/src/main.rs
+```
+
+Run this before committing:
+
+```powershell
+git status
+```
+
+Make sure no `.parquet`, large `.csv`, or `target/` files are listed.

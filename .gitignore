@@ -216,3 +216,43 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Rust
+rust_engine/target/
+**/target/
+Cargo.lock
+
+# Data files
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.db
+*.sqlite
+*.sqlite3
+
+# Large/generated CSV outputs
+01_canonical_data/
+02_features/
+03_strategy_registry/*.csv
+04_rust_inputs/
+05_rust_outputs/
+06_candidates/
+07_portfolio/
+08_allocation/
+
+# NT8 generated deployment artifacts
+09_nt8_deployment/strategy_specs/
+09_nt8_deployment/generated_strategies/
+09_nt8_deployment/review_packages/
+09_nt8_deployment/*.csv
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
