@@ -2,7 +2,6 @@
 # Strategy Generator
 # Regime-Aware Strategy Discovery Pipeline
 # v1 core + v2 momentum + v3 VWAP/ADX/volume/volatility
-# + v4 channels / price structure + v5 custom NT8 levels
 # ============================================================
 
 from __future__ import annotations
@@ -24,8 +23,6 @@ PROJECT_ROOT = Path(r"C:\Users\srobi\OneDrive\Documents\Data\regimeAwareDiscover
 CORE_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_core.parquet"
 V2_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v2.parquet"
 V3_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v3.parquet"
-V4_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v4.parquet"
-V5_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v5.parquet"
 
 REGISTRY_PATH = PROJECT_ROOT / "03_strategy_registry" / "strategy_combinations.csv"
 RUST_INPUT_DIR = PROJECT_ROOT / "04_rust_inputs"
@@ -90,45 +87,6 @@ V3_ENTRY_RULE_TYPES = [
     "vwap_band_breakout_short",
 ]
 
-V4_ENTRY_RULE_TYPES = [
-    "donchian_breakout_long",
-    "donchian_breakout_short",
-    "donchian_mean_revert_long",
-    "donchian_mean_revert_short",
-    "keltner_breakout_long",
-    "keltner_breakout_short",
-    "keltner_mean_revert_long",
-    "keltner_mean_revert_short",
-    "prior_session_high_breakout_long",
-    "prior_session_low_breakout_short",
-    "opening_range_breakout_long",
-    "opening_range_breakout_short",
-]
-
-V5_LEVEL_COLS = [
-    "pivot_point",
-    "r1",
-    "r2",
-    "s1",
-    "s2",
-    "fib_r1",
-    "fib_r2",
-    "fib_s1",
-    "fib_s2",
-]
-
-V5_ENTRY_RULE_TYPES = [
-    "level_breakout_long",
-    "level_breakout_short",
-    "level_mean_revert_long",
-    "level_mean_revert_short",
-    "pivot_cross_long",
-    "pivot_cross_short",
-    "support_bounce_long",
-    "resistance_reject_short",
-]
-
-
 BASE_FILTER_TYPES = [
     "none",
     "choppiness_below",
@@ -161,27 +119,6 @@ V3_FILTER_TYPES = [
     "price_above_vwap",
     "price_below_vwap",
 ]
-
-V4_FILTER_TYPES = [
-    "inside_bar_filter",
-    "outside_bar_filter",
-    "range_expansion_filter",
-    "range_compression_filter",
-    "close_above_prior_session_high",
-    "close_below_prior_session_low",
-    "close_above_opening_range_high",
-    "close_below_opening_range_low",
-]
-
-V5_FILTER_TYPES = [
-    "above_level_filter",
-    "below_level_filter",
-    "near_level_filter",
-    "far_from_level_filter",
-    "above_pivot_filter",
-    "below_pivot_filter",
-]
-
 
 EXIT_RULE_TYPES = [
     "fixed_rr_atr_stop",
@@ -262,11 +199,9 @@ def read_existing_registry(path: Path) -> pd.DataFrame:
 
 def write_registry(path: Path, registry: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
     for field in REGISTRY_FIELDS:
         if field not in registry.columns:
             registry[field] = ""
-
     registry = registry[REGISTRY_FIELDS]
     registry.to_csv(path, index=False)
 
@@ -285,8 +220,6 @@ def validate_required_columns(
     columns: list[str],
     use_v2_features: bool,
     use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
 ) -> None:
     required = [
         "open",
@@ -315,7 +248,7 @@ def validate_required_columns(
     if not has_regime_tuple:
         required.append("regime_tuple")
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features:
         required += [
             "rsi_14",
             "roc_14",
@@ -327,7 +260,7 @@ def validate_required_columns(
             "macd_hist_12_26_9",
         ]
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features:
         required += [
             "vwap_session",
             "vwap_distance",
@@ -347,103 +280,9 @@ def validate_required_columns(
             "atr_14_contraction_20",
         ]
 
-    if use_v4_features or use_v5_features:
-        required += [
-            "donchian_high_20",
-            "donchian_low_20",
-            "donchian_mid_20",
-            "donchian_high_50",
-            "donchian_low_50",
-            "keltner_upper_20_1p5",
-            "keltner_lower_20_1p5",
-            "keltner_upper_20_2p0",
-            "keltner_lower_20_2p0",
-            "prior_session_high",
-            "prior_session_low",
-            "prior_session_close",
-            "opening_range_high_30",
-            "opening_range_low_30",
-            "opening_range_high_60",
-            "opening_range_low_60",
-            "inside_bar",
-            "outside_bar",
-            "bar_range_zscore_20",
-            "range_expansion_20",
-            "range_compression_20",
-            "close_above_prior_session_high",
-            "close_below_prior_session_low",
-            "close_above_opening_range_high_30",
-            "close_below_opening_range_low_30",
-        ]
-
-    if use_v5_features:
-        required += [
-            "pivot_point",
-            "r1",
-            "r2",
-            "s1",
-            "s2",
-            "fib_r1",
-            "fib_r2",
-            "fib_s1",
-            "fib_s2",
-            "dist_close_pivot_point",
-            "dist_close_r1",
-            "dist_close_r2",
-            "dist_close_s1",
-            "dist_close_s2",
-            "dist_close_fib_r1",
-            "dist_close_fib_r2",
-            "dist_close_fib_s1",
-            "dist_close_fib_s2",
-            "above_pivot_point",
-            "above_r1",
-            "above_r2",
-            "above_s1",
-            "above_s2",
-            "above_fib_r1",
-            "above_fib_r2",
-            "above_fib_s1",
-            "above_fib_s2",
-        ]
-
     missing = [c for c in required if c not in columns]
     if missing:
         raise ValueError(f"Feature dataset missing required columns: {missing}")
-
-
-def feature_version_label(
-    use_v2_features: bool,
-    use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
-) -> str:
-    if use_v5_features:
-        return "v5_custom_levels"
-    if use_v4_features:
-        return "v4_channels_price_structure"
-    if use_v3_features:
-        return "v3_vwap_adx_volume_volatility"
-    if use_v2_features:
-        return "v2_momentum"
-    return "core"
-
-
-def engine_version_label(
-    use_v2_features: bool,
-    use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
-) -> str:
-    if use_v5_features:
-        return "strategy_generator_v5"
-    if use_v4_features:
-        return "strategy_generator_v4"
-    if use_v3_features:
-        return "strategy_generator_v3"
-    if use_v2_features:
-        return "strategy_generator_v2_momentum"
-    return "strategy_generator_v1"
 
 
 # ------------------------------------------------------------
@@ -465,28 +304,16 @@ def random_entry_rule(
     rng: random.Random,
     use_v2_features: bool,
     use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
 ) -> dict[str, Any]:
     rule_types = BASE_ENTRY_RULE_TYPES.copy()
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features:
         rule_types += MOMENTUM_ENTRY_RULE_TYPES
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features:
         rule_types += V3_ENTRY_RULE_TYPES
 
-    if use_v4_features or use_v5_features:
-        rule_types += V4_ENTRY_RULE_TYPES
-
-    if use_v5_features:
-        rule_types += V5_ENTRY_RULE_TYPES
-
     rule_type = rng.choice(rule_types)
-
-    # -----------------------------
-    # Core entries
-    # -----------------------------
 
     if rule_type in {"cross_above", "cross_below"}:
         left, right = random_ma_pair(rng)
@@ -553,7 +380,7 @@ def random_entry_rule(
         }
 
     # -----------------------------
-    # v2 momentum entries
+    # Momentum entries
     # -----------------------------
 
     if rule_type == "rsi_oversold_long":
@@ -669,7 +496,7 @@ def random_entry_rule(
             "value": rng.choice([0.0, -50.0, -100.0]),
             "template": rule_type,
         }
-        
+
     # -----------------------------
     # v3 VWAP entries
     # -----------------------------
@@ -728,210 +555,6 @@ def random_entry_rule(
             "template": rule_type,
         }
 
-    # -----------------------------
-    # v4 channel / structure entries
-    # -----------------------------
-
-    if rule_type == "donchian_breakout_long":
-        period = rng.choice([20, 50])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": f"donchian_high_{period}",
-            "template": rule_type,
-        }
-
-    if rule_type == "donchian_breakout_short":
-        period = rng.choice([20, 50])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": f"donchian_low_{period}",
-            "template": rule_type,
-        }
-
-    if rule_type == "donchian_mean_revert_long":
-        period = rng.choice([20, 50])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": f"donchian_low_{period}",
-            "template": rule_type,
-        }
-
-    if rule_type == "donchian_mean_revert_short":
-        period = rng.choice([20, 50])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": f"donchian_high_{period}",
-            "template": rule_type,
-        }
-
-    if rule_type == "keltner_breakout_long":
-        band = rng.choice(["keltner_upper_20_1p5", "keltner_upper_20_2p0"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": band,
-            "template": rule_type,
-        }
-
-    if rule_type == "keltner_breakout_short":
-        band = rng.choice(["keltner_lower_20_1p5", "keltner_lower_20_2p0"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": band,
-            "template": rule_type,
-        }
-
-    if rule_type == "keltner_mean_revert_long":
-        band = rng.choice(["keltner_lower_20_1p5", "keltner_lower_20_2p0"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": band,
-            "template": rule_type,
-        }
-
-    if rule_type == "keltner_mean_revert_short":
-        band = rng.choice(["keltner_upper_20_1p5", "keltner_upper_20_2p0"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": band,
-            "template": rule_type,
-        }
-
-    if rule_type == "prior_session_high_breakout_long":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": "prior_session_high",
-            "template": rule_type,
-        }
-
-    if rule_type == "prior_session_low_breakout_short":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": "prior_session_low",
-            "template": rule_type,
-        }
-
-    if rule_type == "opening_range_breakout_long":
-        minutes = rng.choice([30, 60])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": f"opening_range_high_{minutes}",
-            "template": rule_type,
-        }
-
-    if rule_type == "opening_range_breakout_short":
-        minutes = rng.choice([30, 60])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": f"opening_range_low_{minutes}",
-            "template": rule_type,
-        }
-
-    # -----------------------------
-    # v5 custom level entries
-    # -----------------------------
-
-    if rule_type == "level_breakout_long":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2", "prior_session_high"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_breakout_short":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2", "prior_session_low"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_mean_revert_long":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_mean_revert_short":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "pivot_cross_long":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": "pivot_point",
-            "template": rule_type,
-        }
-
-    if rule_type == "pivot_cross_short":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": "pivot_point",
-            "template": rule_type,
-        }
-
-    if rule_type == "support_bounce_long":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "resistance_reject_short":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
     raise ValueError(f"Unhandled entry rule type: {rule_type}")
 
 
@@ -939,22 +562,14 @@ def random_filter(
     rng: random.Random,
     use_v2_features: bool,
     use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
 ) -> Optional[dict[str, Any]]:
     filter_types = BASE_FILTER_TYPES.copy()
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features:
         filter_types += MOMENTUM_FILTER_TYPES
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features:
         filter_types += V3_FILTER_TYPES
-
-    if use_v4_features or use_v5_features:
-        filter_types += V4_FILTER_TYPES
-
-    if use_v5_features:
-        filter_types += V5_FILTER_TYPES
 
     filter_type = rng.choice(filter_types)
 
@@ -1153,134 +768,6 @@ def random_filter(
             "right": "vwap_session",
         }
 
-    # -----------------------------
-    # v4 price-structure filters
-    # -----------------------------
-
-    if filter_type == "inside_bar_filter":
-        return {
-            "type": "threshold",
-            "column": "inside_bar",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "outside_bar_filter":
-        return {
-            "type": "threshold",
-            "column": "outside_bar",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "range_expansion_filter":
-        return {
-            "type": "threshold",
-            "column": "bar_range_zscore_20",
-            "operator": ">",
-            "value": rng.choice([0.5, 1.0, 1.5]),
-        }
-
-    if filter_type == "range_compression_filter":
-        return {
-            "type": "threshold",
-            "column": "bar_range_zscore_20",
-            "operator": "<",
-            "value": rng.choice([-0.5, -1.0, -1.5]),
-        }
-
-    if filter_type == "close_above_prior_session_high":
-        return {
-            "type": "comparison",
-            "left": "close",
-            "operator": ">",
-            "right": "prior_session_high",
-        }
-
-    if filter_type == "close_below_prior_session_low":
-        return {
-            "type": "comparison",
-            "left": "close",
-            "operator": "<",
-            "right": "prior_session_low",
-        }
-
-    if filter_type == "close_above_opening_range_high":
-        minutes = rng.choice([30, 60])
-        return {
-            "type": "comparison",
-            "left": "close",
-            "operator": ">",
-            "right": f"opening_range_high_{minutes}",
-        }
-
-    if filter_type == "close_below_opening_range_low":
-        minutes = rng.choice([30, 60])
-        return {
-            "type": "comparison",
-            "left": "close",
-            "operator": "<",
-            "right": f"opening_range_low_{minutes}",
-        }
-
-    # -----------------------------
-    # v5 custom level filters
-    # -----------------------------
-
-    if filter_type == "above_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        return {
-            "type": "threshold",
-            "column": f"above_{level}",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "below_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        return {
-            "type": "threshold",
-            "column": f"above_{level}",
-            "operator": "<",
-            "value": 0.5,
-        }
-
-    if filter_type == "near_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        threshold_points = rng.choice([5.0, 10.0, 15.0, 20.0])
-        return {
-            "type": "threshold",
-            "column": f"dist_close_{level}",
-            "operator": "<",
-            "value": threshold_points,
-        }
-
-    if filter_type == "far_from_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        threshold_points = rng.choice([10.0, 20.0, 30.0, 50.0])
-        return {
-            "type": "threshold",
-            "column": f"dist_close_{level}",
-            "operator": ">",
-            "value": threshold_points,
-        }
-
-    if filter_type == "above_pivot_filter":
-        return {
-            "type": "threshold",
-            "column": "above_pivot_point",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "below_pivot_filter":
-        return {
-            "type": "threshold",
-            "column": "above_pivot_point",
-            "operator": "<",
-            "value": 0.5,
-        }
-
     raise ValueError(f"Unhandled filter type: {filter_type}")
 
 
@@ -1334,13 +821,27 @@ def random_regime_filter(
     )
 
 
+def feature_version_label(use_v2_features: bool, use_v3_features: bool) -> str:
+    if use_v3_features:
+        return "v3_vwap_adx_volume_volatility"
+    if use_v2_features:
+        return "v2_momentum"
+    return "core"
+
+
+def engine_version_label(use_v2_features: bool, use_v3_features: bool) -> str:
+    if use_v3_features:
+        return "strategy_generator_v3"
+    if use_v2_features:
+        return "strategy_generator_v2_momentum"
+    return "strategy_generator_v1"
+
+
 def build_strategy_config(
     rng: random.Random,
     include_regime_specialists: bool,
     use_v2_features: bool,
     use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
     instrument: str = "NQ",
     timeframe: str = "1min",
 ) -> dict[str, Any]:
@@ -1348,20 +849,13 @@ def build_strategy_config(
         rng,
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
-        use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
-
     filt = random_filter(
         rng,
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
-        use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
-
     exit_rule = random_exit_rule(rng, entry)
-
     regime_filter_type, regime_filter_value, regime_filter = random_regime_filter(
         rng,
         include_regime_specialists,
@@ -1373,18 +867,8 @@ def build_strategy_config(
     if regime_filter is not None:
         filters.append(regime_filter)
 
-    feature_version = feature_version_label(
-        use_v2_features,
-        use_v3_features,
-        use_v4_features,
-        use_v5_features,
-    )
-    engine_version = engine_version_label(
-        use_v2_features,
-        use_v3_features,
-        use_v4_features,
-        use_v5_features,
-    )
+    feature_version = feature_version_label(use_v2_features, use_v3_features)
+    engine_version = engine_version_label(use_v2_features, use_v3_features)
 
     config = {
         "instrument": instrument,
@@ -1415,7 +899,6 @@ def build_strategy_config(
     parameter_hash = stable_hash(config)
     config["strategy_id"] = f"strat_{parameter_hash}"
     config["parameter_hash"] = parameter_hash
-
     return config
 
 
@@ -1430,12 +913,7 @@ def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
     exit_rule = config.get("exit_rule", {})
 
     feature_version = config.get("feature_version", "core")
-
-    if feature_version.startswith("v5"):
-        strategy_family = "v5_custom_levels_random"
-    elif feature_version.startswith("v4"):
-        strategy_family = "v4_channels_structure_random"
-    elif feature_version.startswith("v3"):
+    if feature_version.startswith("v3"):
         strategy_family = "v3_vwap_adx_volume_random"
     elif feature_version == "v2_momentum":
         strategy_family = "momentum_random_v2"
@@ -1463,17 +941,11 @@ def generate_batch(
     include_regime_specialists: bool,
     use_v2_features: bool,
     use_v3_features: bool,
-    use_v4_features: bool,
-    use_v5_features: bool,
     max_attempts_multiplier: int = 50,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame, Path]:
     rng = random.Random(seed)
 
-    if use_v5_features:
-        feature_dataset_path = V5_FEATURE_DATASET_PATH
-    elif use_v4_features:
-        feature_dataset_path = V4_FEATURE_DATASET_PATH
-    elif use_v3_features:
+    if use_v3_features:
         feature_dataset_path = V3_FEATURE_DATASET_PATH
     elif use_v2_features:
         feature_dataset_path = V2_FEATURE_DATASET_PATH
@@ -1481,13 +953,10 @@ def generate_batch(
         feature_dataset_path = CORE_FEATURE_DATASET_PATH
 
     columns = load_feature_columns(feature_dataset_path)
-
     validate_required_columns(
         columns,
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
-        use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
 
     registry = read_existing_registry(REGISTRY_PATH)
@@ -1507,8 +976,6 @@ def generate_batch(
             include_regime_specialists=include_regime_specialists,
             use_v2_features=use_v2_features,
             use_v3_features=use_v3_features,
-            use_v4_features=use_v4_features,
-            use_v5_features=use_v5_features,
         )
 
         h = config["parameter_hash"]
@@ -1533,12 +1000,7 @@ def generate_batch(
     RUST_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     batch_path = RUST_INPUT_DIR / f"strategy_batch_{batch_timestamp()}.json"
 
-    feature_version = feature_version_label(
-        use_v2_features,
-        use_v3_features,
-        use_v4_features,
-        use_v5_features,
-    )
+    feature_version = feature_version_label(use_v2_features, use_v3_features)
 
     batch_payload = {
         "created_at": now_str(),
@@ -1577,32 +1039,10 @@ def parse_args() -> argparse.Namespace:
         help="Use feature_dataset_v3.parquet and enable VWAP/ADX/volume/volatility templates",
     )
 
-    parser.add_argument(
-        "--use-v4-features",
-        action="store_true",
-        help="Use feature_dataset_v4.parquet and enable channel/price-structure templates",
-    )
-
-    parser.add_argument(
-        "--use-v5-features",
-        action="store_true",
-        help="Use feature_dataset_v5.parquet and enable custom level strategy templates",
-    )
-
     args = parser.parse_args()
 
-    feature_flags = [
-        args.use_v2_features,
-        args.use_v3_features,
-        args.use_v4_features,
-        args.use_v5_features,
-    ]
-
-    if sum(bool(x) for x in feature_flags) > 1:
-        raise ValueError(
-            "Use only one of --use-v2-features, --use-v3-features, "
-            "--use-v4-features, or --use-v5-features."
-        )
+    if args.use_v2_features and args.use_v3_features:
+        raise ValueError("Use either --use-v2-features or --use-v3-features, not both.")
 
     return args
 
@@ -1616,16 +1056,9 @@ if __name__ == "__main__":
         include_regime_specialists=args.include_regime_specialists,
         use_v2_features=args.use_v2_features,
         use_v3_features=args.use_v3_features,
-        use_v4_features=args.use_v4_features,
-        use_v5_features=args.use_v5_features,
     )
 
-    feature_version = feature_version_label(
-        args.use_v2_features,
-        args.use_v3_features,
-        args.use_v4_features,
-        args.use_v5_features,
-    )
+    feature_version = feature_version_label(args.use_v2_features, args.use_v3_features)
 
     print("Strategy batch generated.")
     print(f"Feature version:   {feature_version}")
@@ -1637,3 +1070,5 @@ if __name__ == "__main__":
     if configs:
         print("First strategy:")
         print(json.dumps(configs[0], indent=2))
+        
+# python strategy_generator.py --batch-size 25 --use-v3-features --seed 42

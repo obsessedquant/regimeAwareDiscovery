@@ -2,7 +2,7 @@
 # Strategy Generator
 # Regime-Aware Strategy Discovery Pipeline
 # v1 core + v2 momentum + v3 VWAP/ADX/volume/volatility
-# + v4 channels / price structure + v5 custom NT8 levels
+# + v4 channels / price structure
 # ============================================================
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ CORE_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_core
 V2_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v2.parquet"
 V3_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v3.parquet"
 V4_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v4.parquet"
-V5_FEATURE_DATASET_PATH = PROJECT_ROOT / "02_features" / "feature_dataset_v5.parquet"
 
 REGISTRY_PATH = PROJECT_ROOT / "03_strategy_registry" / "strategy_combinations.csv"
 RUST_INPUT_DIR = PROJECT_ROOT / "04_rust_inputs"
@@ -105,29 +104,6 @@ V4_ENTRY_RULE_TYPES = [
     "opening_range_breakout_short",
 ]
 
-V5_LEVEL_COLS = [
-    "pivot_point",
-    "r1",
-    "r2",
-    "s1",
-    "s2",
-    "fib_r1",
-    "fib_r2",
-    "fib_s1",
-    "fib_s2",
-]
-
-V5_ENTRY_RULE_TYPES = [
-    "level_breakout_long",
-    "level_breakout_short",
-    "level_mean_revert_long",
-    "level_mean_revert_short",
-    "pivot_cross_long",
-    "pivot_cross_short",
-    "support_bounce_long",
-    "resistance_reject_short",
-]
-
 
 BASE_FILTER_TYPES = [
     "none",
@@ -171,15 +147,6 @@ V4_FILTER_TYPES = [
     "close_below_prior_session_low",
     "close_above_opening_range_high",
     "close_below_opening_range_low",
-]
-
-V5_FILTER_TYPES = [
-    "above_level_filter",
-    "below_level_filter",
-    "near_level_filter",
-    "far_from_level_filter",
-    "above_pivot_filter",
-    "below_pivot_filter",
 ]
 
 
@@ -286,7 +253,6 @@ def validate_required_columns(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
 ) -> None:
     required = [
         "open",
@@ -315,7 +281,7 @@ def validate_required_columns(
     if not has_regime_tuple:
         required.append("regime_tuple")
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features or use_v4_features:
         required += [
             "rsi_14",
             "roc_14",
@@ -327,7 +293,7 @@ def validate_required_columns(
             "macd_hist_12_26_9",
         ]
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features or use_v4_features:
         required += [
             "vwap_session",
             "vwap_distance",
@@ -347,7 +313,7 @@ def validate_required_columns(
             "atr_14_contraction_20",
         ]
 
-    if use_v4_features or use_v5_features:
+    if use_v4_features:
         required += [
             "donchian_high_20",
             "donchian_low_20",
@@ -376,37 +342,6 @@ def validate_required_columns(
             "close_below_opening_range_low_30",
         ]
 
-    if use_v5_features:
-        required += [
-            "pivot_point",
-            "r1",
-            "r2",
-            "s1",
-            "s2",
-            "fib_r1",
-            "fib_r2",
-            "fib_s1",
-            "fib_s2",
-            "dist_close_pivot_point",
-            "dist_close_r1",
-            "dist_close_r2",
-            "dist_close_s1",
-            "dist_close_s2",
-            "dist_close_fib_r1",
-            "dist_close_fib_r2",
-            "dist_close_fib_s1",
-            "dist_close_fib_s2",
-            "above_pivot_point",
-            "above_r1",
-            "above_r2",
-            "above_s1",
-            "above_s2",
-            "above_fib_r1",
-            "above_fib_r2",
-            "above_fib_s1",
-            "above_fib_s2",
-        ]
-
     missing = [c for c in required if c not in columns]
     if missing:
         raise ValueError(f"Feature dataset missing required columns: {missing}")
@@ -416,10 +351,7 @@ def feature_version_label(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
 ) -> str:
-    if use_v5_features:
-        return "v5_custom_levels"
     if use_v4_features:
         return "v4_channels_price_structure"
     if use_v3_features:
@@ -433,10 +365,7 @@ def engine_version_label(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
 ) -> str:
-    if use_v5_features:
-        return "strategy_generator_v5"
     if use_v4_features:
         return "strategy_generator_v4"
     if use_v3_features:
@@ -466,21 +395,17 @@ def random_entry_rule(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
 ) -> dict[str, Any]:
     rule_types = BASE_ENTRY_RULE_TYPES.copy()
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features or use_v4_features:
         rule_types += MOMENTUM_ENTRY_RULE_TYPES
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features or use_v4_features:
         rule_types += V3_ENTRY_RULE_TYPES
 
-    if use_v4_features or use_v5_features:
+    if use_v4_features:
         rule_types += V4_ENTRY_RULE_TYPES
-
-    if use_v5_features:
-        rule_types += V5_ENTRY_RULE_TYPES
 
     rule_type = rng.choice(rule_types)
 
@@ -850,88 +775,6 @@ def random_entry_rule(
             "template": rule_type,
         }
 
-    # -----------------------------
-    # v5 custom level entries
-    # -----------------------------
-
-    if rule_type == "level_breakout_long":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2", "prior_session_high"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_breakout_short":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2", "prior_session_low"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_mean_revert_long":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "level_mean_revert_short":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "pivot_cross_long":
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": "pivot_point",
-            "template": rule_type,
-        }
-
-    if rule_type == "pivot_cross_short":
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": "pivot_point",
-            "template": rule_type,
-        }
-
-    if rule_type == "support_bounce_long":
-        level = rng.choice(["s1", "s2", "fib_s1", "fib_s2"])
-        return {
-            "type": "cross_above",
-            "side": "long",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
-    if rule_type == "resistance_reject_short":
-        level = rng.choice(["r1", "r2", "fib_r1", "fib_r2"])
-        return {
-            "type": "cross_below",
-            "side": "short",
-            "left": "close",
-            "right": level,
-            "template": rule_type,
-        }
-
     raise ValueError(f"Unhandled entry rule type: {rule_type}")
 
 
@@ -940,21 +783,17 @@ def random_filter(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
 ) -> Optional[dict[str, Any]]:
     filter_types = BASE_FILTER_TYPES.copy()
 
-    if use_v2_features or use_v3_features or use_v4_features or use_v5_features:
+    if use_v2_features or use_v3_features or use_v4_features:
         filter_types += MOMENTUM_FILTER_TYPES
 
-    if use_v3_features or use_v4_features or use_v5_features:
+    if use_v3_features or use_v4_features:
         filter_types += V3_FILTER_TYPES
 
-    if use_v4_features or use_v5_features:
+    if use_v4_features:
         filter_types += V4_FILTER_TYPES
-
-    if use_v5_features:
-        filter_types += V5_FILTER_TYPES
 
     filter_type = rng.choice(filter_types)
 
@@ -1223,64 +1062,6 @@ def random_filter(
             "right": f"opening_range_low_{minutes}",
         }
 
-    # -----------------------------
-    # v5 custom level filters
-    # -----------------------------
-
-    if filter_type == "above_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        return {
-            "type": "threshold",
-            "column": f"above_{level}",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "below_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        return {
-            "type": "threshold",
-            "column": f"above_{level}",
-            "operator": "<",
-            "value": 0.5,
-        }
-
-    if filter_type == "near_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        threshold_points = rng.choice([5.0, 10.0, 15.0, 20.0])
-        return {
-            "type": "threshold",
-            "column": f"dist_close_{level}",
-            "operator": "<",
-            "value": threshold_points,
-        }
-
-    if filter_type == "far_from_level_filter":
-        level = rng.choice(V5_LEVEL_COLS)
-        threshold_points = rng.choice([10.0, 20.0, 30.0, 50.0])
-        return {
-            "type": "threshold",
-            "column": f"dist_close_{level}",
-            "operator": ">",
-            "value": threshold_points,
-        }
-
-    if filter_type == "above_pivot_filter":
-        return {
-            "type": "threshold",
-            "column": "above_pivot_point",
-            "operator": ">",
-            "value": 0.5,
-        }
-
-    if filter_type == "below_pivot_filter":
-        return {
-            "type": "threshold",
-            "column": "above_pivot_point",
-            "operator": "<",
-            "value": 0.5,
-        }
-
     raise ValueError(f"Unhandled filter type: {filter_type}")
 
 
@@ -1340,7 +1121,6 @@ def build_strategy_config(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
     instrument: str = "NQ",
     timeframe: str = "1min",
 ) -> dict[str, Any]:
@@ -1349,7 +1129,6 @@ def build_strategy_config(
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
         use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
 
     filt = random_filter(
@@ -1357,7 +1136,6 @@ def build_strategy_config(
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
         use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
 
     exit_rule = random_exit_rule(rng, entry)
@@ -1373,18 +1151,8 @@ def build_strategy_config(
     if regime_filter is not None:
         filters.append(regime_filter)
 
-    feature_version = feature_version_label(
-        use_v2_features,
-        use_v3_features,
-        use_v4_features,
-        use_v5_features,
-    )
-    engine_version = engine_version_label(
-        use_v2_features,
-        use_v3_features,
-        use_v4_features,
-        use_v5_features,
-    )
+    feature_version = feature_version_label(use_v2_features, use_v3_features, use_v4_features)
+    engine_version = engine_version_label(use_v2_features, use_v3_features, use_v4_features)
 
     config = {
         "instrument": instrument,
@@ -1431,9 +1199,7 @@ def make_registry_row(config: dict[str, Any]) -> GeneratedStrategy:
 
     feature_version = config.get("feature_version", "core")
 
-    if feature_version.startswith("v5"):
-        strategy_family = "v5_custom_levels_random"
-    elif feature_version.startswith("v4"):
+    if feature_version.startswith("v4"):
         strategy_family = "v4_channels_structure_random"
     elif feature_version.startswith("v3"):
         strategy_family = "v3_vwap_adx_volume_random"
@@ -1464,14 +1230,11 @@ def generate_batch(
     use_v2_features: bool,
     use_v3_features: bool,
     use_v4_features: bool,
-    use_v5_features: bool,
     max_attempts_multiplier: int = 50,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame, Path]:
     rng = random.Random(seed)
 
-    if use_v5_features:
-        feature_dataset_path = V5_FEATURE_DATASET_PATH
-    elif use_v4_features:
+    if use_v4_features:
         feature_dataset_path = V4_FEATURE_DATASET_PATH
     elif use_v3_features:
         feature_dataset_path = V3_FEATURE_DATASET_PATH
@@ -1487,7 +1250,6 @@ def generate_batch(
         use_v2_features=use_v2_features,
         use_v3_features=use_v3_features,
         use_v4_features=use_v4_features,
-        use_v5_features=use_v5_features,
     )
 
     registry = read_existing_registry(REGISTRY_PATH)
@@ -1508,7 +1270,6 @@ def generate_batch(
             use_v2_features=use_v2_features,
             use_v3_features=use_v3_features,
             use_v4_features=use_v4_features,
-            use_v5_features=use_v5_features,
         )
 
         h = config["parameter_hash"]
@@ -1537,7 +1298,6 @@ def generate_batch(
         use_v2_features,
         use_v3_features,
         use_v4_features,
-        use_v5_features,
     )
 
     batch_payload = {
@@ -1583,26 +1343,16 @@ def parse_args() -> argparse.Namespace:
         help="Use feature_dataset_v4.parquet and enable channel/price-structure templates",
     )
 
-    parser.add_argument(
-        "--use-v5-features",
-        action="store_true",
-        help="Use feature_dataset_v5.parquet and enable custom level strategy templates",
-    )
-
     args = parser.parse_args()
 
     feature_flags = [
         args.use_v2_features,
         args.use_v3_features,
         args.use_v4_features,
-        args.use_v5_features,
     ]
 
     if sum(bool(x) for x in feature_flags) > 1:
-        raise ValueError(
-            "Use only one of --use-v2-features, --use-v3-features, "
-            "--use-v4-features, or --use-v5-features."
-        )
+        raise ValueError("Use only one of --use-v2-features, --use-v3-features, or --use-v4-features.")
 
     return args
 
@@ -1617,14 +1367,12 @@ if __name__ == "__main__":
         use_v2_features=args.use_v2_features,
         use_v3_features=args.use_v3_features,
         use_v4_features=args.use_v4_features,
-        use_v5_features=args.use_v5_features,
     )
 
     feature_version = feature_version_label(
         args.use_v2_features,
         args.use_v3_features,
         args.use_v4_features,
-        args.use_v5_features,
     )
 
     print("Strategy batch generated.")
